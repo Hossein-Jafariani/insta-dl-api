@@ -1,44 +1,12 @@
-# app.py
+# app.py (نسخه نهایی بدون Instaloader و بدون نیاز به لاگین)
 
 import json
 import subprocess
-import instaloader
 import re 
-import os 
 from flask import Flask, request, jsonify
-from instaloader.exceptions import TwoFactorAuthRequiredException, BadCredentialsException, PostException
+import os # همچنان برای استفاده‌های احتمالی آینده باقی می‌ماند اما در این کد استفاده نمی‌شود.
 
 app = Flask(__name__)
-
-# ******* تنظیمات Instaloader *******
-# این نمونه به صورت خاموش و بدون دانلود فایل کار می‌کند و فقط برای استخراج ابرداده استفاده می‌شود.
-L = instaloader.Instaloader(
-    compress_json=False,
-    quiet=True,          
-    download_videos=False,
-    download_pictures=False,
-    download_comments=False,
-    save_metadata=False,
-    max_connection_attempts=1
-)
-
-# خواندن اطلاعات کاربری از متغیرهای محیطی برای Login (اختیاری اما توصیه می‌شود)
-INSTA_USERNAME = os.environ.get('INSTA_USERNAME')
-INSTA_PASSWORD = os.environ.get('INSTA_PASSWORD')
-
-if INSTA_USERNAME and INSTA_PASSWORD:
-    try:
-        print(f"Attempting Instaloader login as {INSTA_USERNAME}...")
-        L.login(INSTA_USERNAME, INSTA_PASSWORD)
-        print("Instaloader logged in successfully.")
-    except TwoFactorAuthRequiredException:
-        print("Login failed: Two-factor authentication is required.")
-    except BadCredentialsException:
-        print("Login failed: Bad username or password.")
-    except Exception as e:
-        print(f"Instaloader login failed: {e}")
-else:
-    print("INSTA_USERNAME or INSTA_PASSWORD not set. Running Instaloader without login (less stable).")
 
 # ******* تابع‌های کمکی *******
 
@@ -49,46 +17,12 @@ def get_shortcode_from_url(url):
         return match.group(1)
     return None
 
-def extract_media_from_instaloader(post, title):
-    """پردازش خروجی Instaloader برای پست‌های آلبوم و تکی."""
-    items = []
-    
-    # اگر پست آلبوم باشد (Carousel)
-    if post.mediacount > 1:
-        for i, (is_video, display_url, video_url) in enumerate(zip(
-            post.is_video, post.display_url, post.video_url
-        )):
-            media_type = 'video' if is_video else 'photo'
-            download_link = video_url if is_video else display_url 
-            
-            if download_link and download_link.startswith('http'):
-                 items.append({
-                    'type': media_type,
-                    'download_url': download_link,
-                    'thumbnail_url': post.url,
-                    'description': f"آیتم {i+1} آلبوم ({media_type})",
-                })
-    
-    # اگر پست تکی باشد
-    else:
-        media_type = 'video' if post.is_video else 'photo'
-        download_link = post.video_url if post.is_video else post.display_url
-        
-        if download_link and download_link.startswith('http'):
-            items.append({
-                'type': media_type,
-                'download_url': download_link,
-                'thumbnail_url': post.url,
-                'description': title,
-            })
-            
-    return items
-
 def extract_media_from_ytdlp(insta_url, title):
-    """اجرای yt-dlp برای ویدیوها و آلبوم‌های پیچیده (Fallback)."""
+    """اجرای yt-dlp برای استخراج اطلاعات پست (عکس، ویدیو، آلبوم) بدون لاگین."""
     items = []
+    
+    # 1. اجرای yt-dlp با حداقل آرگومان‌ها
     try:
-        # اجرای yt-dlp با حداقل آرگومان‌ها
         command = [
             'yt-dlp',
             '--dump-single-json',
@@ -99,19 +33,24 @@ def extract_media_from_ytdlp(insta_url, title):
         result = subprocess.run(command, capture_output=True, text=True, check=True)
         video_info = json.loads(result.stdout)
         
-    except subprocess.CalledProcessError:
+    except subprocess.CalledProcessError as e:
+        print(f"yt-dlp failed to extract info. Error: {e.stderr.strip()}")
+        return []
+    except Exception as e:
+        print(f"yt-dlp general error: {e}")
         return []
 
-    # yt-dlp برای آلبوم‌ها:
+    # 2. پردازش خروجی: آلبوم‌ها (Carousel)
     if video_info.get('_type') == 'playlist':
         entries = video_info.get('entries', [])
         for item in entries:
             if not item or not item.get('url'): continue
             
+            # تشخیص نوع: اگر is_video یا mp4 بود -> ویدیو، در غیر این صورت -> عکس
             media_type = 'video' if item.get('is_video') or item.get('ext') == 'mp4' else 'photo'
-            download_url = item.get('url') 
+            download_url = item.get('url')
             
-            # جستجو برای لینک پایدارتر در requested_formats
+            # جستجو برای لینک پایدارتر در requested_formats (برای آلبوم‌ها مهم است)
             if item.get('requested_formats'):
                 target_ext = 'mp4' if media_type == 'video' else 'jpg'
                 for fmt in item['requested_formats']:
@@ -127,7 +66,7 @@ def extract_media_from_ytdlp(insta_url, title):
                     'description': item.get('description', f"آیتم آلبوم ({media_type})")
                 })
     
-    # yt-dlp برای پست‌های تکی:
+    # 3. پردازش خروجی: پست‌های تکی (ریلز، ویدیو، عکس)
     else:
         media_type = 'video' if video_info.get('is_video') or video_info.get('ext') == 'mp4' else 'photo'
         download_url = video_info.get('url')
@@ -135,10 +74,20 @@ def extract_media_from_ytdlp(insta_url, title):
         # جستجو برای لینک پایدارتر در requested_formats
         if video_info.get('requested_formats'):
             target_ext = 'mp4' if media_type == 'video' else 'jpg'
-            for fmt in video_info['requested_formats']:
-                if fmt.get('url') and fmt.get('ext') == target_ext:
-                    download_url = fmt['url']
-                    break
+            # اگر پست عکس باشد، به دنبال بهترین کیفیت 'jpg' می‌گردیم
+            if media_type == 'photo':
+                # معمولاً لینک با کیفیت بالاتر در انتهای لیست requested_formats است
+                reversed_formats = reversed(video_info['requested_formats'])
+                for fmt in reversed_formats:
+                    if fmt.get('url') and fmt.get('ext') == 'jpg':
+                        download_url = fmt['url']
+                        break
+            # اگر ویدیو باشد، به دنبال لینک 'mp4' می‌گردیم
+            elif media_type == 'video':
+                 for fmt in video_info['requested_formats']:
+                    if fmt.get('url') and fmt.get('ext') == 'mp4':
+                        download_url = fmt['url']
+                        break
                     
         if download_url and download_url.startswith('http'):
              items.append({
@@ -164,60 +113,24 @@ def get_info():
     if not insta_url:
         return jsonify({'success': False, 'message': 'لطفاً لینک معتبر ارائه دهید.'}), 400
 
-    shortcode = get_shortcode_from_url(insta_url)
-    instaloader_failed = False
+    title = "Instagram_Media"
     
-    # 1. --- تلاش برای استخراج با Instaloader (Fast Track) ---
-    if shortcode:
-        try:
-            post = instaloader.Post.from_shortcode(L, shortcode) 
-            title = post.title if post.title else post.shortcode
-            media_items = extract_media_from_instaloader(post, title)
-            
-            if media_items:
-                return jsonify({
-                    'success': True,
-                    'title': title,
-                    'media_items': media_items
-                })
-            
-            instaloader_failed = True # اگر آیتمی برنگردد یا مشکلی باشد، به fallback می‌رویم
-                
-        except (PostException, Exception) as e:
-            error_message = str(e)
-            
-            # مدیریت خطای 'no video' برای عکس‌ها و سایر خطاها
-            if "there is no video in this post" in error_message or "not found" in error_message:
-                print(f"Instaloader failed (Photo Post/Not Found): Forced fallback to yt-dlp. Error: {error_message}")
-                instaloader_failed = True 
-            else:
-                 print(f"Instaloader General Error: {e}. Falling back to yt-dlp.")
-                 instaloader_failed = True
-
-    # 2. --- اگر Instaloader شکست خورد، از yt-dlp استفاده کن (Fallback) ---
-    if instaloader_failed or not shortcode:
-        try:
-            title = "Instagram_Media"
-            media_items = extract_media_from_ytdlp(insta_url, title)
-            
-            if not media_items:
-                 return jsonify({'success': False, 'message': 'محتوایی پیدا نشد، خصوصی است یا فرمت پشتیبانی نمی‌شود.'}), 404
-
-            return jsonify({
-                'success': True,
-                'title': title,
-                'media_items': media_items
-            })
-
-        except subprocess.CalledProcessError as e:
-            error_msg = e.stderr.strip().split('\n')[-1]
-            return jsonify({'success': False, 'message': f'خطا در استخراج: پست خصوصی یا نامعتبر است. {error_msg}'}), 500
+    # اجرای مستقیم yt-dlp
+    try:
+        media_items = extract_media_from_ytdlp(insta_url, title)
         
-        except Exception as e:
-            return jsonify({'success': False, 'message': f'خطای ناشناخته در سرور: {str(e)}'}), 500
+        if not media_items:
+             # اگر yt-dlp هیچ آیتمی برنگرداند، احتمالاً پست پرایوت یا حذف شده است.
+             return jsonify({'success': False, 'message': 'محتوایی پیدا نشد، احتمالاً پست خصوصی یا نامعتبر است.'}), 404
 
-    # اگر به اینجا برسد، یعنی هیچکدام از ابزارها کار نکردند.
-    return jsonify({'success': False, 'message': 'دریافت اطلاعات پست امکان‌پذیر نیست.'}), 500
+        return jsonify({
+            'success': True,
+            'title': media_items[0].get('description', title), # عنوان را از اولین آیتم می‌گیریم
+            'media_items': media_items
+        })
+
+    except Exception as e:
+        return jsonify({'success': False, 'message': f'خطای ناشناخته در سرور: {str(e)}'}), 500
 
 if __name__ == '__main__':
     app.run(debug=True, port=8000)
