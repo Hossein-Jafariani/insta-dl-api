@@ -1,4 +1,4 @@
-# app.py
+# app.py (نسخه جدید برای استخراج اطلاعات کامل)
 
 import json
 import subprocess
@@ -11,69 +11,81 @@ app = Flask(__name__)
 def home():
     return 'Instagram Downloader API is running successfully!'
 
-# مسیر اصلی API برای دانلود ویدیو
-@app.route('/download', methods=['GET'])
-def download_video():
-    # دریافت لینک اینستاگرام از پارامتر url
+# مسیر اصلی API برای دریافت اطلاعات پست
+@app.route('/info', methods=['GET']) # مسیر را به /info تغییر دادیم
+def get_info():
     insta_url = request.args.get('url')
     
-    # اگر لینک ارسال نشده باشد
     if not insta_url:
         return jsonify({
             'success': False,
-            'message': 'Please provide a valid Instagram URL.'
+            'message': 'لطفاً لینک معتبر اینستاگرام را ارائه دهید.'
         }), 400
 
     try:
-        # 1. اجرای دستور yt-dlp برای استخراج لینک MP4
-        # --print-json: خروجی را به فرمت JSON بده.
-        # --skip-download: فقط اطلاعات را استخراج کن، دانلود نکن.
-        # -f best: بهترین کیفیت موجود را پیدا کن.
+        # اجرای دستور yt-dlp برای استخراج اطلاعات کامل
+        # --dump-single-json: فقط JSON خروجی را بده (نه آرایه)
+        # --no-playlist: اگر پست آلبوم باشد، به عنوان یک لیست در entries خروجی می‌دهد.
         command = [
             'yt-dlp',
-            '--print-json',
-            '--skip-download',
-            '-f', 'best',
+            '--dump-single-json',
+            '--no-playlist',
             insta_url
         ]
         
-        # اجرای دستور در ترمینال سرور
         result = subprocess.run(command, capture_output=True, text=True, check=True)
-        
-        # 2. پردازش خروجی JSON از yt-dlp
         video_info = json.loads(result.stdout)
         
-        # استخراج لینک مستقیم نهایی
-        download_url = video_info.get('url')
-        title = video_info.get('title', 'instagram_video')
+        # 1. ساخت لیست محتوا (برای پشتیبانی از آلبوم‌ها)
+        media_items = []
+        title = video_info.get('title', 'instagram_media')
         
-        if download_url:
-            return jsonify({
-                'success': True,
-                'download_url': download_url,
-                'title': title
-            })
+        # بررسی می‌کنیم که آیا پست آلبوم (Playlist) است
+        if video_info.get('_type') == 'playlist':
+            # اگر آلبوم باشد، هر آیتم در entries ذخیره شده است
+            entries = video_info.get('entries', [])
+            for item in entries:
+                if item and 'url' in item:
+                    media_items.append({
+                        'type': item.get('ext', 'photo') if item.get('ext') != 'mp4' else 'video',
+                        'download_url': item.get('url'),
+                        'thumbnail_url': item.get('thumbnail'),
+                        'description': item.get('description', 'آیتم آلبوم')
+                    })
         else:
-            return jsonify({
-                'success': False,
-                'message': 'Could not extract download link from Instagram post.'
-            }), 404
+            # اگر پست تکی باشد (ریلز، ویدیو، یا عکس)
+            # yt-dlp لینک نهایی دانلود را در 'url' می‌گذارد و نوع را در 'ext'
+            media_type = 'video' if video_info.get('ext') == 'mp4' else 'photo'
+            
+            media_items.append({
+                'type': media_type,
+                'download_url': video_info.get('url'),
+                'thumbnail_url': video_info.get('thumbnail'),
+                'description': video_info.get('description', title)
+            })
+
+        if not media_items:
+             return jsonify({'success': False, 'message': 'محتوایی پیدا نشد.'}), 404
+
+        return jsonify({
+            'success': True,
+            'title': title,
+            'media_items': media_items
+        })
 
     except subprocess.CalledProcessError as e:
-        # خطاهای مربوط به yt-dlp (مثلا پست خصوصی است)
         error_msg = e.stderr.strip()
         return jsonify({
             'success': False,
-            'message': f'Extraction failed: {error_msg}'
+            'message': f'خطا در استخراج: پست خصوصی یا نامعتبر است. {error_msg}'
         }), 500
     
     except Exception as e:
-        # سایر خطاهای عمومی
         return jsonify({
             'success': False,
-            'message': f'An unexpected error occurred: {str(e)}'
+            'message': f'خطای ناشناخته: {str(e)}'
         }), 500
 
-# اگر در محیط توسعه لوکال اجرا شود
 if __name__ == '__main__':
-    app.run(debug=True)
+    # توجه: در Render این بخش اجرا نمی‌شود.
+    app.run(debug=True, port=8000)
