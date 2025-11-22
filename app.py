@@ -1,75 +1,125 @@
-# app.py (نسخه هوشمند: آلبوم با yt-dlp، عکس با HTML Scraper)
+# app.py (نسخه نهایی ۳ لایه: yt-dlp -> Instaloader -> HTML)
 
 import json
 import subprocess
 import re
 import requests
+import instaloader
 from flask import Flask, request, jsonify
 
 app = Flask(__name__)
 
+# تنظیم Instaloader (بدون لاگین)
+L = instaloader.Instaloader(
+    quiet=True,
+    download_videos=False,
+    download_pictures=False,
+    save_metadata=False,
+    max_connection_attempts=1
+)
+
 @app.route('/')
 def home():
-    return 'Instagram Hybrid API is LIVE!'
+    return 'Instagram Ultimate API is LIVE!'
 
-# --- روش 1: اسکرپ HTML (روش تلگرام/فیسبوک) ---
-# این روش برای تک‌عکس‌ها عالی است و بلاک نمی‌شود
-def scrape_html_metadata(insta_url):
-    print(f"Running HTML Scraper for: {insta_url}")
+def get_shortcode(url):
+    match = re.search(r'/(?:p|tv|reel)/([^/]+)', url)
+    if match: return match.group(1)
+    return None
+
+# ---------------------------------------------------------
+# لایه ۱: yt-dlp (برای ریلز و ویدیو عالی است)
+# ---------------------------------------------------------
+def run_ytdlp(insta_url):
+    print("LAYER 1: Running yt-dlp...")
     try:
-        # این User-Agent کلید موفقیت است: اینستاگرام فکر می‌کند ما ربات تلگرام هستیم
+        # استفاده از User-Agent موبایل سامسونگ (کمتر بلاک می‌شود)
+        mobile_ua = 'Mozilla/5.0 (Linux; Android 10; SM-G981B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/80.0.3987.162 Mobile Safari/537.36'
+        
+        command = [
+            'yt-dlp',
+            '--dump-single-json',
+            '--no-playlist', 
+            '--skip-download',
+            '--user-agent', mobile_ua,
+            insta_url
+        ]
+        result = subprocess.run(command, capture_output=True, text=True)
+        if result.returncode != 0: return None
+        return json.loads(result.stdout)
+    except:
+        return None
+
+# ---------------------------------------------------------
+# لایه ۲: Instaloader (برای آلبوم‌ها عالی است)
+# ---------------------------------------------------------
+def run_instaloader(shortcode):
+    print("LAYER 2: Running Instaloader...")
+    items = []
+    try:
+        post = instaloader.Post.from_shortcode(L, shortcode)
+        
+        # اگر آلبوم است
+        if post.mediacount > 1:
+            print("Instaloader detected ALBUM.")
+            # حلقه روی اسلایدها (Sidecars)
+            for i, node in enumerate(post.get_sidecar_nodes()):
+                media_type = 'video' if node.is_video else 'photo'
+                dl_url = node.video_url if node.is_video else node.display_url
+                
+                if dl_url:
+                    items.append({
+                        'type': media_type,
+                        'download_url': dl_url,
+                        'thumbnail_url': post.url, # تامبنیل کلی
+                        'description': f"اسلاید {i+1} ({media_type})"
+                    })
+        # اگر پست تکی است (که yt-dlp نتوانسته بگیرد)
+        else:
+            media_type = 'video' if post.is_video else 'photo'
+            dl_url = post.video_url if post.is_video else post.display_url
+            if dl_url:
+                items.append({
+                    'type': media_type,
+                    'download_url': dl_url,
+                    'thumbnail_url': post.url,
+                    'description': 'Instagram Media (Via Instaloader)'
+                })
+                
+        return items
+    except Exception as e:
+        print(f"Instaloader Failed: {e}")
+        return None
+
+# ---------------------------------------------------------
+# لایه ۳: HTML Scraping (آخرین امید - عکس با کیفیت)
+# ---------------------------------------------------------
+def run_html_scraper(insta_url):
+    print("LAYER 3: Running HTML Scraper...")
+    try:
         headers = {
             'User-Agent': 'facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-            'Accept-Language': 'en-US,en;q=0.9'
+            'Accept': 'text/html',
         }
-        
         response = requests.get(insta_url, headers=headers, timeout=10)
         if response.status_code != 200: return None
         
         html = response.text
-        
-        # استخراج عکس اصلی (og:image) - همیشه کیفیت بالاست
         img_match = re.search(r'<meta property="og:image" content="([^"]+)"', html)
-        # استخراج توضیحات
         desc_match = re.search(r'<meta property="og:title" content="([^"]+)"', html)
-        description = desc_match.group(1) if desc_match else "Instagram Media"
-
+        
         if img_match:
             clean_url = img_match.group(1).replace('&amp;', '&')
             return [{
                 'type': 'photo',
                 'download_url': clean_url,
                 'thumbnail_url': clean_url,
-                'description': description
+                'description': desc_match.group(1) if desc_match else "Instagram Photo"
             }]
-            
-    except Exception as e:
-        print(f"Scrape Error: {e}")
-    
+    except:
+        pass
     return None
 
-# --- روش 2: yt-dlp (قدرتمند برای آلبوم و ویدیو) ---
-def run_ytdlp(insta_url):
-    print(f"Running yt-dlp for: {insta_url}")
-    try:
-        fake_ua = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-        command = [
-            'yt-dlp',
-            '--dump-single-json',
-            '--no-playlist', # ما خودمان دستی پلی‌لیست را پردازش می‌کنیم
-            '--skip-download',
-            '--user-agent', fake_ua,
-            insta_url
-        ]
-        result = subprocess.run(command, capture_output=True, text=True)
-        if result.returncode != 0: 
-            print(f"yt-dlp failed: {result.stderr}")
-            return None
-        return json.loads(result.stdout)
-    except Exception as e:
-        print(f"yt-dlp Exception: {e}")
-        return None
 
 @app.route('/info', methods=['GET']) 
 def get_info():
@@ -77,29 +127,23 @@ def get_info():
     if not insta_url:
         return jsonify({'success': False, 'message': 'لینک نامعتبر است.'}), 400
 
+    shortcode = get_shortcode(insta_url)
     media_items = []
     title = "Instagram_Media"
 
-    # استراتژی هوشمند:
-    # 1. اول yt-dlp را اجرا کن تا ببینیم آیا آلبوم (Playlist) یا ویدیو است؟
-    video_info = run_ytdlp(insta_url)
+    # --- استراتژی آبشاری ---
 
-    is_album_or_video = False
-    
+    # 1. تلاش با yt-dlp
+    video_info = run_ytdlp(insta_url)
     if video_info:
-        # الف) اگر آلبوم است: حتماً از yt-dlp استفاده کن (چون HTML Scraper فقط عکس اول را می‌بیند)
-        if video_info.get('_type') == 'playlist':
-            print("Detected Type: ALBUM (Playlist)")
-            is_album_or_video = True
-            title = video_info.get('title', 'Instagram Album')
+        # اگر yt-dlp موفق شد دیتا بگیرد
+        if video_info.get('_type') == 'playlist': # آلبوم تشخیص داد
             entries = video_info.get('entries', [])
-            
             for i, item in enumerate(entries):
                 if not item: continue
                 m_type = 'video' if (item.get('is_video') or item.get('ext') == 'mp4') else 'photo'
                 dl_link = item.get('url')
-                
-                # تلاش برای کیفیت بهتر
+                # پیدا کردن لینک بهتر
                 if item.get('requested_formats'):
                      target_ext = 'mp4' if m_type == 'video' else 'jpg'
                      formats = item['requested_formats']
@@ -114,56 +158,46 @@ def get_info():
                         'thumbnail_url': item.get('thumbnail'),
                         'description': f"اسلاید {i+1} ({m_type})"
                     })
-
-        # ب) اگر پست تکی است اما ویدیو/ریلز است
-        elif video_info.get('is_video') or video_info.get('ext') == 'mp4':
-            print("Detected Type: SINGLE VIDEO/REEL")
-            is_album_or_video = True
-            title = video_info.get('title', 'Instagram Reel')
+        else:
+            # پست تکی (ویدیو یا عکس)
+            is_vid = video_info.get('is_video') or video_info.get('ext') == 'mp4'
+            m_type = 'video' if is_vid else 'photo'
             dl_link = video_info.get('url')
             
             if video_info.get('requested_formats'):
-                for fmt in video_info['requested_formats']:
-                    if fmt.get('url') and fmt.get('ext') == 'mp4':
+                target_ext = 'mp4' if m_type == 'video' else 'jpg'
+                formats = video_info['requested_formats']
+                if m_type == 'photo': formats = reversed(formats)
+                for fmt in formats:
+                    if fmt.get('url') and fmt.get('ext') == target_ext:
                         dl_link = fmt['url']; break
             
+            # فیلتر کردن لینک های خالی yt-dlp (برای عکس‌ها گاهی خالی میفرستد)
             if dl_link:
                 media_items.append({
-                    'type': 'video', 'download_url': dl_link,
-                    'thumbnail_url': video_info.get('thumbnail'), 'description': title
+                    'type': m_type, 'download_url': dl_link,
+                    'thumbnail_url': video_info.get('thumbnail'), 'description': video_info.get('title', title)
                 })
 
-    # 2. تصمیم‌گیری نهایی:
-    # اگر yt-dlp چیزی پیدا نکرد (شکست خورد) 
-    # یا اگر yt-dlp پیدا کرد اما "تک عکس" بود (که معمولاً کیفیت پایین است)
-    # ==> برو سراغ HTML Scraping
-    
-    if not is_album_or_video:
-        print("yt-dlp failed OR it is a Single Photo. Falling back to HTML Scraping...")
-        scraped_data = scrape_html_metadata(insta_url)
-        
-        if scraped_data:
-            print("HTML Scraping SUCCESS!")
-            return jsonify({'success': True, 'title': 'Instagram Photo', 'media_items': scraped_data})
-        
-        # اگر اسکرپر هم شکست خورد اما yt-dlp یک عکس (شاید کیفیت پایین) داشت، همان را بده
-        elif video_info and not media_items: # اگر yt-dlp دیتا داشت اما ما بالا ردش کردیم
-             # اینجا کد مربوط به استخراج عکس از yt-dlp را به عنوان آخرین چاره می‌گذاریم
-             dl_link = video_info.get('url')
-             if video_info.get('requested_formats'):
-                 for fmt in reversed(video_info['requested_formats']):
-                     if fmt.get('url') and fmt.get('ext') != 'mp4':
-                         dl_link = fmt['url']; break
-             if dl_link:
-                 media_items.append({
-                     'type': 'photo', 'download_url': dl_link,
-                     'thumbnail_url': video_info.get('thumbnail'), 'description': title
-                 })
+    # 2. اگر yt-dlp شکست خورد (یا لیست خالی بود)، برو سراغ Instaloader
+    if not media_items and shortcode:
+        loader_items = run_instaloader(shortcode)
+        if loader_items:
+            media_items = loader_items
+            title = "Instagram Album (Instaloader)"
 
+    # 3. اگر Instaloader هم شکست خورد، برو سراغ HTML Scraper (عکس اول)
+    if not media_items:
+        html_items = run_html_scraper(insta_url)
+        if html_items:
+            media_items = html_items
+            title = "Instagram Photo (HTML)"
+
+    # نتیجه نهایی
     if media_items:
         return jsonify({'success': True, 'title': title, 'media_items': media_items})
 
-    return jsonify({'success': False, 'message': 'محتوایی پیدا نشد (404).'}), 404
+    return jsonify({'success': False, 'message': 'محتوایی پیدا نشد.'}), 404
 
 if __name__ == '__main__':
     app.run(debug=True, port=8000)
