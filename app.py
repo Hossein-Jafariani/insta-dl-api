@@ -3,12 +3,14 @@
 import json
 import subprocess
 import instaloader
-import re # برای استفاده از Regex جهت استخراج shortcode
+import re 
+import os 
 from flask import Flask, request, jsonify
+from instaloader.exceptions import TwoFactorAuthRequiredException, BadCredentialsException, PostException
 
 app = Flask(__name__)
 
-# ساخت یک نمونه Instaloader
+# ******* تنظیمات Instaloader *******
 # این نمونه به صورت خاموش و بدون دانلود فایل کار می‌کند و فقط برای استخراج ابرداده استفاده می‌شود.
 L = instaloader.Instaloader(
     compress_json=False,
@@ -20,36 +22,50 @@ L = instaloader.Instaloader(
     max_connection_attempts=1
 )
 
-# تابع کمکی برای استخراج Shortcode از URL
+# خواندن اطلاعات کاربری از متغیرهای محیطی برای Login (اختیاری اما توصیه می‌شود)
+INSTA_USERNAME = os.environ.get('INSTA_USERNAME')
+INSTA_PASSWORD = os.environ.get('INSTA_PASSWORD')
+
+if INSTA_USERNAME and INSTA_PASSWORD:
+    try:
+        print(f"Attempting Instaloader login as {INSTA_USERNAME}...")
+        L.login(INSTA_USERNAME, INSTA_PASSWORD)
+        print("Instaloader logged in successfully.")
+    except TwoFactorAuthRequiredException:
+        print("Login failed: Two-factor authentication is required.")
+    except BadCredentialsException:
+        print("Login failed: Bad username or password.")
+    except Exception as e:
+        print(f"Instaloader login failed: {e}")
+else:
+    print("INSTA_USERNAME or INSTA_PASSWORD not set. Running Instaloader without login (less stable).")
+
+# ******* تابع‌های کمکی *******
+
 def get_shortcode_from_url(url):
     """استخراج shortcode پست از فرمت‌های مختلف لینک اینستاگرام."""
-    # جستجو برای shortcode در مسیرهای p/, tv/, reel/
     match = re.search(r'/(?:p|tv|reel)/([^/]+)', url)
     if match:
         return match.group(1)
     return None
 
-# تابع کمکی برای استخراج لینک‌های دانلود از اطلاعات Instaloader (Fast Track)
 def extract_media_from_instaloader(post, title):
     """پردازش خروجی Instaloader برای پست‌های آلبوم و تکی."""
     items = []
     
     # اگر پست آلبوم باشد (Carousel)
     if post.mediacount > 1:
-        # Instaloader داده‌های آلبوم را به صورت آرایه‌های جداگانه می‌دهد.
-        # استفاده از zip برای ترکیب داده‌ها
         for i, (is_video, display_url, video_url) in enumerate(zip(
             post.is_video, post.display_url, post.video_url
         )):
             media_type = 'video' if is_video else 'photo'
             download_link = video_url if is_video else display_url 
             
-            # اطمینان از معتبر بودن لینک و شروع آن با http
             if download_link and download_link.startswith('http'):
                  items.append({
                     'type': media_type,
                     'download_url': download_link,
-                    'thumbnail_url': post.url, # استفاده از تامبنیل اصلی پست
+                    'thumbnail_url': post.url,
                     'description': f"آیتم {i+1} آلبوم ({media_type})",
                 })
     
@@ -68,12 +84,11 @@ def extract_media_from_instaloader(post, title):
             
     return items
 
-# تابع کمکی برای استخراج لینک‌های دانلود از اطلاعات yt-dlp (Fallback)
 def extract_media_from_ytdlp(insta_url, title):
-    """اجرای yt-dlp برای ویدیوها و آلبوم‌های پیچیده."""
+    """اجرای yt-dlp برای ویدیوها و آلبوم‌های پیچیده (Fallback)."""
     items = []
     try:
-        # اجرای yt-dlp با حداقل آرگومان‌ها برای جلوگیری از تداخل با فرمت‌ها
+        # اجرای yt-dlp با حداقل آرگومان‌ها
         command = [
             'yt-dlp',
             '--dump-single-json',
@@ -85,7 +100,6 @@ def extract_media_from_ytdlp(insta_url, title):
         video_info = json.loads(result.stdout)
         
     except subprocess.CalledProcessError:
-        # در صورت شکست yt-dlp
         return []
 
     # yt-dlp برای آلبوم‌ها:
@@ -95,7 +109,7 @@ def extract_media_from_ytdlp(insta_url, title):
             if not item or not item.get('url'): continue
             
             media_type = 'video' if item.get('is_video') or item.get('ext') == 'mp4' else 'photo'
-            download_url = item.get('url')
+            download_url = item.get('url') 
             
             # جستجو برای لینک پایدارتر در requested_formats
             if item.get('requested_formats'):
@@ -137,6 +151,8 @@ def extract_media_from_ytdlp(insta_url, title):
     return items
 
 
+# ******* مسیرهای API *******
+
 @app.route('/')
 def home():
     return 'Instagram Downloader API is running successfully! Status: LIVE'
@@ -149,11 +165,11 @@ def get_info():
         return jsonify({'success': False, 'message': 'لطفاً لینک معتبر ارائه دهید.'}), 400
 
     shortcode = get_shortcode_from_url(insta_url)
+    instaloader_failed = False
     
     # 1. --- تلاش برای استخراج با Instaloader (Fast Track) ---
     if shortcode:
         try:
-            # Shortcode را به Instaloader می‌دهیم تا اطلاعات کامل را بیاورد.
             post = instaloader.Post.from_shortcode(L, shortcode) 
             title = post.title if post.title else post.shortcode
             media_items = extract_media_from_instaloader(post, title)
@@ -164,34 +180,44 @@ def get_info():
                     'title': title,
                     'media_items': media_items
                 })
+            
+            instaloader_failed = True # اگر آیتمی برنگردد یا مشکلی باشد، به fallback می‌رویم
                 
-        except instaloader.exceptions.PostException as e:
-             # اگر پست خصوصی بود یا پیدا نشد، به yt-dlp برمی‌گردیم.
-             print(f"Instaloader Post Error: {e}. Falling back to yt-dlp.")
-        except Exception as e:
-            # خطاهای عمومی مثل مشکل شبکه یا ساخت Shortcode
-            print(f"Instaloader General Error: {e}. Falling back to yt-dlp.")
+        except (PostException, Exception) as e:
+            error_message = str(e)
+            
+            # مدیریت خطای 'no video' برای عکس‌ها و سایر خطاها
+            if "there is no video in this post" in error_message or "not found" in error_message:
+                print(f"Instaloader failed (Photo Post/Not Found): Forced fallback to yt-dlp. Error: {error_message}")
+                instaloader_failed = True 
+            else:
+                 print(f"Instaloader General Error: {e}. Falling back to yt-dlp.")
+                 instaloader_failed = True
 
     # 2. --- اگر Instaloader شکست خورد، از yt-dlp استفاده کن (Fallback) ---
-    try:
-        title = "Instagram_Media"
-        media_items = extract_media_from_ytdlp(insta_url, title)
+    if instaloader_failed or not shortcode:
+        try:
+            title = "Instagram_Media"
+            media_items = extract_media_from_ytdlp(insta_url, title)
+            
+            if not media_items:
+                 return jsonify({'success': False, 'message': 'محتوایی پیدا نشد، خصوصی است یا فرمت پشتیبانی نمی‌شود.'}), 404
+
+            return jsonify({
+                'success': True,
+                'title': title,
+                'media_items': media_items
+            })
+
+        except subprocess.CalledProcessError as e:
+            error_msg = e.stderr.strip().split('\n')[-1]
+            return jsonify({'success': False, 'message': f'خطا در استخراج: پست خصوصی یا نامعتبر است. {error_msg}'}), 500
         
-        if not media_items:
-             return jsonify({'success': False, 'message': 'محتوایی پیدا نشد، خصوصی است یا فرمت پشتیبانی نمی‌شود.'}), 404
+        except Exception as e:
+            return jsonify({'success': False, 'message': f'خطای ناشناخته در سرور: {str(e)}'}), 500
 
-        return jsonify({
-            'success': True,
-            'title': title,
-            'media_items': media_items
-        })
-
-    except subprocess.CalledProcessError as e:
-        error_msg = e.stderr.strip().split('\n')[-1]
-        return jsonify({'success': False, 'message': f'خطا در استخراج: پست خصوصی یا نامعتبر است. {error_msg}'}), 500
-    
-    except Exception as e:
-        return jsonify({'success': False, 'message': f'خطای ناشناخته در سرور: {str(e)}'}), 500
+    # اگر به اینجا برسد، یعنی هیچکدام از ابزارها کار نکردند.
+    return jsonify({'success': False, 'message': 'دریافت اطلاعات پست امکان‌پذیر نیست.'}), 500
 
 if __name__ == '__main__':
     app.run(debug=True, port=8000)
