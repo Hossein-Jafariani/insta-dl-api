@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
-
-# نصب yt-dlp و Instaloader
-pip install yt-dlp flask instaloader gunicorn
+# فقط yt-dlp و Flask مورد نیاز هستند
+pip install yt-dlp flask gunicorn
 
 # اجرای برنامه
 gunicorn --workers 4 app:app
