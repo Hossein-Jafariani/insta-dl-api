@@ -9,25 +9,16 @@ app = Flask(__name__)
 
 # --- متد 1: Instagram oEmbed API (برای عکس‌های تکی) ---
 def get_oembed_data(insta_url):
-    """
-    استفاده از API رسمی oEmbed اینستاگرام برای گرفتن لینک عکس با کیفیت بالا (High-Res).
-    این روش برای عکس‌های تکی بسیار پایدار است و توسط شبکه‌های اجتماعی مثل تلگرام استفاده می‌شود.
-    """
     print(f"Checking oEmbed API for: {insta_url}")
     try:
         api_url = f"https://www.instagram.com/api/v1/oembed/?url={insta_url}"
-        
-        # User-Agent گوگل‌بات برای اطمینان از دسترسی به API
         headers = {
             'User-Agent': 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)'
         }
-        
         response = requests.get(api_url, headers=headers, timeout=10)
         
         if response.status_code == 200:
             data = response.json()
-            
-            # thumbnail_url در oEmbed معمولا کیفیت اصلی است.
             image_url = data.get('thumbnail_url')
             title = data.get('title', 'Instagram Photo')
             
@@ -48,28 +39,28 @@ def get_oembed_data(insta_url):
 def run_ytdlp(insta_url):
     """
     اجرای yt-dlp برای محتوای پیچیده‌تر (آلبوم و ویدیو). 
-    با تایم‌اوت بالا و گزارش خطای بهتر برای افزایش پایداری.
+    *بدون پرچم --no-playlist* برای استخراج کامل آلبوم.
     """
     print(f"Running yt-dlp for: {insta_url}")
     
-    fake_ua = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    # ⭐️ تغییر User-Agent به موبایل برای افزایش شانس دریافت JSON آلبوم ⭐️
+    fake_ua = 'Mozilla/5.0 (iPhone; CPU iPhone OS 14_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.0.3 Mobile/15E148 Safari/604.1'
     
     command = [
         'yt-dlp',
         '--dump-single-json',
-        '--no-playlist', 
+        # ⭐️ اصلاح حیاتی: حذف پرچم --no-playlist برای فعال کردن استخراج آلبوم ⭐️
         '--skip-download',
         '--user-agent', fake_ua,
         insta_url
     ]
     
     try:
-        # تایم‌اوت سخاوتمندانه ۱۸۰ ثانیه برای پروسس‌های طولانی (مثل آلبوم)
+        # تایم‌اوت سخاوتمندانه ۱۸۰ ثانیه 
         result = subprocess.run(command, capture_output=True, text=True, timeout=180) 
         
         if result.returncode != 0: 
             print(f"yt-dlp FAILED with code {result.returncode}")
-            # چاپ جزئیات خطا در لاگ سرور
             print(f"yt-dlp STDERR: {result.stderr[:500]}...")
             return None
             
@@ -105,7 +96,7 @@ def get_info():
     is_video_or_album = False
     
     if video_info:
-        # ⭐️ پردازش آلبوم (Slideshow) - منطق قوی‌تر برای عکس‌های اسلایدی ⭐️
+        # ⭐️ پردازش آلبوم (Slideshow) ⭐️
         if video_info.get('_type') == 'playlist':
             is_video_or_album = True
             entries = video_info.get('entries', [])
@@ -132,7 +123,6 @@ def get_info():
                     if not found_high_res:
                         thumbnails = item.get('thumbnails', [])
                         if thumbnails:
-                            # مرتب‌سازی بر اساس عرض (بزرگترین سایز در آخر لیست)
                             sorted_thumbs = sorted(thumbnails, key=lambda x: x.get('width', 0) if x.get('width') else 0)
                             best_thumb = sorted_thumbs[-1]
                             if best_thumb.get('url'):
@@ -170,8 +160,8 @@ def get_info():
                      'type': 'photo', 'download_url': dl_link,
                      'thumbnail_url': video_info.get('thumbnail'), 'description': title
                  })
-                 is_video_or_album = True # برای جلوگیری از اجرای oEmbed
-        
+                 is_video_or_album = True 
+
 
     # 2. اگر نه آلبوم بود و نه ویدیو (عکس تکی است) ==> استفاده از روش oEmbed
     if not is_video_or_album:
