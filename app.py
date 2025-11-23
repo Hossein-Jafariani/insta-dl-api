@@ -1,68 +1,57 @@
-# app.py (نسخه نهایی: اولویت مطلق با متد تلگرام برای عکس‌ها)
+# app.py (نسخه oEmbed - روشی که تلگرام استفاده می‌کند)
 
 import json
 import subprocess
-import re
 import requests
-import html
 from flask import Flask, request, jsonify
 
 app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return 'Instagram API (Telegram Method Priority) is LIVE!'
+    return 'Instagram API (oEmbed Strategy) is LIVE!'
 
-# --- متد 1: استخراج HTML (دقیقاً مثل تلگرام) ---
-# این متد همیشه عکس باکیفیت (1080p) را می‌دهد
-def scrape_html_like_telegram(insta_url):
-    print(f"Running HTML Scraper (Telegram Method) for: {insta_url}")
+# --- متد 1: Instagram oEmbed API (رسمی و با کیفیت) ---
+def get_oembed_data(insta_url):
+    print(f"Checking oEmbed API for: {insta_url}")
     try:
-        # هدر دقیق فیس‌بوک/تلگرام برای فریب دادن اینستاگرام
+        # آدرس API رسمی اینستاگرام
+        api_url = f"https://www.instagram.com/api/v1/oembed/?url={insta_url}"
+        
+        # هدر ساده (نیازی به جعل پیچیده نیست)
         headers = {
-            'User-Agent': 'facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-            'Accept-Language': 'en-US,en;q=0.5'
+            'User-Agent': 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)'
         }
         
-        # درخواست مستقیم به صفحه HTML
-        response = requests.get(insta_url, headers=headers, timeout=10)
+        response = requests.get(api_url, headers=headers, timeout=10)
         
-        if response.status_code != 200:
-            return None
+        # اگر پاسخ موفق بود
+        if response.status_code == 200:
+            data = response.json()
             
-        html_content = response.text
-        
-        # 1. آیا ویدیو است؟ (og:video)
-        video_match = re.search(r'<meta property="og:video" content="([^"]+)"', html_content)
-        if video_match:
-            print("Detected VIDEO via HTML. Switching to yt-dlp logic...")
-            return "IS_VIDEO" # علامت می‌دهیم که این ویدیو است و باید با yt-dlp دانلود شود
-
-        # 2. آیا عکس است؟ (og:image)
-        image_match = re.search(r'<meta property="og:image" content="([^"]+)"', html_content)
-        desc_match = re.search(r'<meta property="og:title" content="([^"]+)"', html_content)
-        
-        if image_match:
-            # تمیز کردن لینک (تبدیل &amp; به &)
-            clean_url = html.unescape(image_match.group(1))
+            # دریافت لینک عکس با کیفیت (thumbnail_url در oEmbed معمولا کیفیت اصلی است)
+            image_url = data.get('thumbnail_url')
+            title = data.get('title', 'Instagram Photo')
             
-            print("Detected PHOTO via HTML. Returning High-Res URL.")
-            return [{
-                'type': 'photo',
-                'download_url': clean_url,
-                'thumbnail_url': clean_url,
-                'description': desc_match.group(1) if desc_match else "Instagram Photo (High-Res)"
-            }]
+            # نکته مهم: oEmbed نوع مدیا را دقیق نمی‌گوید، اما اگر thumbnail_url باشد، یعنی عکس کاور داریم.
+            # ما فعلا فرض می‌کنیم عکس است. اگر yt-dlp پایین‌تر تشخیص داد ویدیو است، اصلاح می‌شود.
             
+            if image_url:
+                print("oEmbed Success! Found High-Res Image.")
+                return {
+                    'type': 'photo', # پیش‌فرض عکس
+                    'download_url': image_url,
+                    'thumbnail_url': image_url,
+                    'description': title
+                }
     except Exception as e:
-        print(f"HTML Scraper Failed: {e}")
-    
+        print(f"oEmbed Failed: {e}")
+        
     return None
 
-# --- متد 2: yt-dlp (برای ویدیو، ریلز و آلبوم‌ها) ---
+# --- متد 2: yt-dlp (برای ویدیو و آلبوم) ---
 def run_ytdlp(insta_url):
-    print(f"Running yt-dlp for Video/Album: {insta_url}")
+    print(f"Running yt-dlp for Video check...")
     try:
         fake_ua = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
         command = [
@@ -88,44 +77,28 @@ def get_info():
     media_items = []
     title = "Instagram_Media"
 
-    # **********************************************************
-    # قدم اول: اجرای متد تلگرام (HTML)
-    # هدف: اگر عکس تکی است، همینجا با کیفیت اصلی بگیریم و تمام.
-    # **********************************************************
-    html_result = scrape_html_like_telegram(insta_url)
-
-    # حالت A: اگر خروجی لیست بود، یعنی عکس تکی پیدا شد -> برگرداندن نتیجه
-    if isinstance(html_result, list):
-        return jsonify({
-            'success': True, 
-            'title': html_result[0]['description'], 
-            'media_items': html_result
-        })
-
-    # حالت B: اگر خروجی "IS_VIDEO" بود یا کلاً None بود -> برو سراغ yt-dlp
-    # (چون برای ویدیو و آلبوم، yt-dlp بهتر عمل می‌کند)
-    
-    # **********************************************************
-    # قدم دوم: اجرای yt-dlp (برای ویدیو و آلبوم)
-    # **********************************************************
+    # 1. ابتدا yt-dlp را چک می‌کنیم تا بفهمیم "ویدیو/آلبوم" است یا نه؟
+    # (چون oEmbed برای ویدیو، لینک دانلود فیلم را نمی‌دهد، فقط کاور می‌دهد)
     video_info = run_ytdlp(insta_url)
     
+    is_video_or_album = False
+    
     if video_info:
-        title = video_info.get('title', 'Instagram_Media')
-        
-        # پردازش آلبوم (Slideshow)
+        # اگر آلبوم بود
         if video_info.get('_type') == 'playlist':
+            is_video_or_album = True
             entries = video_info.get('entries', [])
+            title = video_info.get('title', 'Instagram Album')
             for i, item in enumerate(entries):
                 if not item: continue
                 m_type = 'video' if (item.get('is_video') or item.get('ext') == 'mp4') else 'photo'
                 dl_link = item.get('url')
                 
-                # تلاش برای پیدا کردن بهترین لینک در آلبوم
+                # تلاش برای لینک بهتر در آلبوم
                 if item.get('requested_formats'):
                      target_ext = 'mp4' if m_type == 'video' else 'jpg'
                      formats = item['requested_formats']
-                     if m_type == 'photo': formats = reversed(formats) # بزرگترین عکس
+                     if m_type == 'photo': formats = reversed(formats)
                      for fmt in formats:
                         if fmt.get('url') and fmt.get('ext') == target_ext:
                             dl_link = fmt['url']; break
@@ -137,25 +110,40 @@ def get_info():
                         'description': f"اسلاید {i+1} ({m_type})"
                     })
 
-        # پردازش ویدیو/ریلز تکی
-        else:
-            is_vid = video_info.get('is_video') or video_info.get('ext') == 'mp4'
-            m_type = 'video' if is_vid else 'photo'
+        # اگر ویدیو/ریلز تکی بود
+        elif video_info.get('is_video') or video_info.get('ext') == 'mp4':
+            is_video_or_album = True
+            title = video_info.get('title', 'Instagram Reel')
             dl_link = video_info.get('url')
-            
             if video_info.get('requested_formats'):
-                target_ext = 'mp4' if m_type == 'video' else 'jpg'
-                formats = video_info['requested_formats']
-                if m_type == 'photo': formats = reversed(formats)
-                for fmt in formats:
-                    if fmt.get('url') and fmt.get('ext') == target_ext:
+                for fmt in video_info['requested_formats']:
+                    if fmt.get('url') and fmt.get('ext') == 'mp4':
                         dl_link = fmt['url']; break
-
+            
             if dl_link:
                 media_items.append({
-                    'type': m_type, 'download_url': dl_link,
+                    'type': 'video', 'download_url': dl_link,
                     'thumbnail_url': video_info.get('thumbnail'), 'description': title
                 })
+
+    # 2. اگر ویدیو یا آلبوم نبود (یعنی عکس تکی است یا yt-dlp شکست خورد)
+    # ==> از روش oEmbed استفاده کن (اینجاست که عکس با کیفیت میاد)
+    if not is_video_or_album:
+        print("Not a video/album. Trying oEmbed for High-Res Photo...")
+        oembed_data = get_oembed_data(insta_url)
+        
+        if oembed_data:
+            media_items.append(oembed_data)
+            title = oembed_data['description']
+        
+        # فال‌بک نهایی: اگر oEmbed هم نشد ولی yt-dlp یه چیزی داشت (حتی بی کیفیت)
+        elif video_info and not media_items:
+             dl_link = video_info.get('url')
+             if dl_link:
+                 media_items.append({
+                     'type': 'photo', 'download_url': dl_link,
+                     'thumbnail_url': video_info.get('thumbnail'), 'description': title
+                 })
 
     if media_items:
         return jsonify({'success': True, 'title': title, 'media_items': media_items})
