@@ -15,6 +15,9 @@ def is_instagram_url(url):
     """بررسی می‌کند آیا لینک مربوط به اینستاگرام است یا خیر."""
     return "instagram.com" in url.lower() or "instagr.am" in url.lower()
 
+def is_youtube_url(url):
+    """بررسی می‌کند آیا لینک مربوط به یوتیوب است یا خیر."""
+    return "youtube.com" in url.lower() or "youtu.be" in url.lower()
 
 # --- متد 1: Instagram oEmbed API (برای عکس‌های تکی) ---
 def get_oembed_data(insta_url):
@@ -47,8 +50,7 @@ def get_oembed_data(insta_url):
 # --- متد 2: yt-dlp (همه سایت‌ها) ---
 def run_ytdlp(input_url, timeout=60):
     """
-    اجرای yt-dlp برای همه انواع محتوا (اینستاگرام، یوتیوب، تیک‌تاک، فیس‌بوک).
-    در صورت شکست، خطای دقیق را در لاگ چاپ می‌کند.
+    اجرای yt-dlp با تنظیمات اختصاصی برای اینستاگرام و یوتیوب.
     """
     
     IG_USERNAME = os.environ.get('igdlll')
@@ -66,17 +68,29 @@ def run_ytdlp(input_url, timeout=60):
         input_url
     ]
     
-    # ⭐️ لاگین اینستاگرام فقط برای لینک‌های اینستاگرام ⭐️
-    if IG_USERNAME and IG_PASSWORD and is_instagram_url(input_url):
-        print("Using provided Instagram credentials for login...")
-        command.extend(['--username', IG_USERNAME, '--password', IG_PASSWORD])
+    # ⭐️ اصلاح حیاتی برای یوتیوب: دور زدن بلاک ربات ⭐️
+    if is_youtube_url(input_url):
+        print("Applying YouTube bot bypass argument.")
+        # این پرچم به yt-dlp می‌گوید که از یک کلاینت پیش‌فرض استفاده کند و بلاک sign-in را دور بزند
+        command.append('--extractor-args')
+        command.append('youtube:player_client=default')
+        # برای یوتیوب نیازی به no-playlist نیست، چون ما فقط اولین ویدیو را می‌خواهیم
+
+    # ⭐️ پشتیبانی از لاگین اینستاگرام ⭐️
+    if is_instagram_url(input_url):
+        # برای اینستاگرام ما فقط اولین آیتم را می‌خواهیم
+        command.append('--no-playlist')
+        if IG_USERNAME and IG_PASSWORD:
+            print("Using provided Instagram credentials for login.")
+            command.extend(['--username', IG_USERNAME, '--password', IG_PASSWORD])
+        else:
+             print("Warning: Instagram login required, but credentials are not set.")
     
     try:
         result = subprocess.run(command, capture_output=True, text=True, timeout=timeout) 
         
         if result.returncode != 0: 
             print(f"yt-dlp FAILED with code {result.returncode}")
-            # ⭐️ گزارش خطای دقیق yt-dlp به لاگ سرور ⭐️
             print(f"yt-dlp STDERR: {result.stderr[:1000]}") 
             return None
             
@@ -116,7 +130,8 @@ def get_info():
         
         # الف) اگر محتوا آلبوم یا پلی‌لیست بود (فقط اولین آیتم را می‌خواهیم)
         if video_info.get('_type') == 'playlist' and video_info.get('entries'):
-            # فقط اولین آیتم (اسلاید/ویدیو) را برمی‌داریم
+            # این حالت بیشتر برای پلی‌لیست‌های یوتیوب یا آلبوم‌های پیچیده پیش می‌آید
+            # ما فقط اولین آیتم را می‌خواهیم
             first_item = video_info['entries'][0]
             m_type = 'video' if (first_item.get('is_video') or first_item.get('ext') == 'mp4') else 'photo'
             dl_link = first_item.get('url')
@@ -180,4 +195,3 @@ def get_info():
 
 if __name__ == '__main__':
     app.run(debug=True, port=8000)
-
