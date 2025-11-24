@@ -2,3 +2,4 @@ Flask
 yt-dlp
 gunicorn
 requests
+js2py  # ⭐️ پکیج جدید برای اجرای JavaScript ⭐️
