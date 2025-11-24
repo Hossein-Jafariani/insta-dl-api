@@ -53,8 +53,8 @@ def run_ytdlp(input_url, timeout=60):
     اجرای yt-dlp با تنظیمات اختصاصی برای اینستاگرام و یوتیوب.
     """
     
-    IG_USERNAME = os.environ.get('igdlll')
-    IG_PASSWORD = os.environ.get('Igdlll3456')
+    IG_USERNAME = os.environ.get('IG_USERNAME')
+    IG_PASSWORD = os.environ.get('IG_PASSWORD')
 
     print(f"Running yt-dlp for: {input_url}")
     
@@ -68,12 +68,12 @@ def run_ytdlp(input_url, timeout=60):
         input_url
     ]
     
-    # ⭐️ اصلاح حیاتی برای یوتیوب: دور زدن بلاک ربات ⭐️
+    # ⭐️ اصلاح حیاتی برای یوتیوب: تغییر Client ID ⭐️
     if is_youtube_url(input_url):
-        print("Applying YouTube bot bypass argument.")
-        # این پرچم به yt-dlp می‌گوید که از یک کلاینت پیش‌فرض استفاده کند و بلاک sign-in را دور بزند
+        print("Applying YouTube bot bypass argument with web_public client.")
+        # این پرچم به yt-dlp می‌گوید که از یک کلاینت دیگر استفاده کند تا بلاک sign-in را دور بزند
         command.append('--extractor-args')
-        command.append('youtube:player_client=default')
+        command.append('youtube:player_client=web_public')
         # برای یوتیوب نیازی به no-playlist نیست، چون ما فقط اولین ویدیو را می‌خواهیم
 
     # ⭐️ پشتیبانی از لاگین اینستاگرام ⭐️
