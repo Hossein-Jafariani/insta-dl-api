@@ -3,28 +3,31 @@ import subprocess
 import requests
 import html
 import re
+import os # برای لاگین اینستاگرام
+
 from flask import Flask, request, jsonify
 
 app = Flask(__name__)
 
+# --- ابزارهای کمکی ---
+
+def is_instagram_url(url):
+    """بررسی می‌کند آیا لینک مربوط به اینستاگرام است یا خیر."""
+    return "instagram.com" in url.lower() or "instagr.am" in url.lower()
+
+
 # --- متد 1: Instagram oEmbed API (برای عکس‌های تکی) ---
 def get_oembed_data(insta_url):
-    """
-    استفاده از API رسمی oEmbed اینستاگرام برای گرفتن لینک عکس با کیفیت بالا (High-Res).
-    """
     print(f"Checking oEmbed API for: {insta_url}")
     try:
         api_url = f"https://www.instagram.com/api/v1/oembed/?url={insta_url}"
-        
         headers = {
             'User-Agent': 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)'
         }
-        
         response = requests.get(api_url, headers=headers, timeout=10)
         
         if response.status_code == 200:
             data = response.json()
-            
             image_url = data.get('thumbnail_url')
             title = data.get('title', 'Instagram Photo')
             
@@ -41,26 +44,33 @@ def get_oembed_data(insta_url):
         
     return None
 
-# --- متد 2: yt-dlp (برای تعیین نوع محتوا و گرفتن ویدیو) ---
-def run_ytdlp(insta_url, timeout=30): # ⭐️ تایم‌اوت کاهش یافت ⭐️
+# --- متد 2: yt-dlp (همه سایت‌ها) ---
+def run_ytdlp(input_url, timeout=60): # ⭐️ تایم‌اوت افزایش یافت به ۶۰ ثانیه ⭐️
     """
-    اجرای yt-dlp برای تعیین نوع محتوا (ویدیو یا آلبوم).
+    اجرای yt-dlp برای همه انواع محتوا (اینستاگرام، یوتیوب، تیک‌تاک، فیس‌بوک).
     """
-    print(f"Running yt-dlp for: {insta_url}")
     
-    # User-Agent موبایل برای افزایش شانس دریافت JSON
+    IG_USERNAME = os.environ.get('igdlll')
+    IG_PASSWORD = os.environ.get('Igdlll3456')
+
+    print(f"Running yt-dlp for: {input_url}")
+    
     fake_ua = 'Mozilla/5.0 (iPhone; CPU iPhone OS 14_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.0.3 Mobile/15E148 Safari/604.1'
     
     command = [
         'yt-dlp',
         '--dump-single-json',
         '--skip-download',
+        '--no-playlist', # ⭐️ برای ویدیوهای تکی یوتیوب/تیک‌تاک این پرچم لازم نیست، اما برای سرعت بهتر است
         '--user-agent', fake_ua,
-        insta_url
+        input_url
     ]
     
+    if IG_USERNAME and IG_PASSWORD and is_instagram_url(input_url):
+        print("Using provided Instagram credentials for login...")
+        command.extend(['--username', IG_USERNAME, '--password', IG_PASSWORD])
+    
     try:
-        # ⭐️ تایم‌اوت ۳۰ ثانیه برای اجرای سریع ⭐️
         result = subprocess.run(command, capture_output=True, text=True, timeout=timeout) 
         
         if result.returncode != 0: 
@@ -82,94 +92,90 @@ def run_ytdlp(insta_url, timeout=30): # ⭐️ تایم‌اوت کاهش یاف
 
 @app.route('/')
 def home():
-    return 'Instagram API (Fast Cover Version) is LIVE!'
+    return 'Instagram API (Final Stable Version) is LIVE!'
 
 @app.route('/info', methods=['GET']) 
 def get_info():
-    insta_url = request.args.get('url')
-    if not insta_url:
+    input_url = request.args.get('url')
+    if not input_url:
         return jsonify({'success': False, 'message': 'لینک نامعتبر است.'}), 400
 
     media_items = []
-    title = "Instagram_Media"
+    title = "Media"
+    
+    is_insta = is_instagram_url(input_url)
 
-    # 1. اجرای yt-dlp برای تعیین نوع پست (ویدیو یا آلبوم)
-    # اگر نتواند نوع پست را در 30 ثانیه بفهمد، به مرحله 2 می‌رویم (که احتمالاً عکس تکی است)
-    video_info = run_ytdlp(insta_url, timeout=30)
+    # 1. اجرای yt-dlp برای گرفتن داده‌های خام
+    video_info = run_ytdlp(input_url, timeout=60) # ⭐️ استفاده از تایم‌اوت ۶۰ ثانیه ⭐️
     
     if video_info:
-        title = video_info.get('title', 'Instagram Media')
+        title = video_info.get('title', 'Media')
         
-        # ⭐️ تغییر حیاتی: پردازش آلبوم ⭐️
-        if video_info.get('_type') == 'playlist':
-            print("Detected ALBUM. Extracting only the first slide/cover...")
+        # ⭐️ پردازش محتوای ویدیو (برای یوتیوب، تیک‌تاک، فیس‌بوک و اینستا-ویدیو) ⭐️
+        
+        # الف) اگر محتوا آلبوم یا پلی‌لیست بود (فقط اولین آیتم را می‌خواهیم)
+        if video_info.get('_type') == 'playlist' and video_info.get('entries'):
+            # فقط اولین آیتم (اسلاید/ویدیو) را برمی‌داریم (درخواست قبلی شما)
+            first_item = video_info['entries'][0]
+            m_type = 'video' if (first_item.get('is_video') or first_item.get('ext') == 'mp4') else 'photo'
+            dl_link = first_item.get('url')
             
-            # اگر آلبوم باشد، فقط لینک اولین اسلاید را می‌گیریم و با oEmbed پردازش می‌کنیم
-            if video_info.get('entries') and video_info['entries'][0]:
-                first_item = video_info['entries'][0]
-                first_url = first_item.get('webpage_url', insta_url)
+            # اگر اینستاگرام بود و عکس، از oEmbed برای کاور با کیفیت استفاده می‌کنیم
+            if is_insta and m_type == 'photo':
+                oembed_data = get_oembed_data(first_item.get('webpage_url', input_url))
+                if oembed_data:
+                    media_items.append(oembed_data)
                 
-                # بررسی می‌کنیم اگر ویدیو بود، لینک ویدیو را مستقیماً از yt-dlp بگیریم
-                if first_item.get('is_video') or first_item.get('ext') == 'mp4':
-                    print("First slide is VIDEO. Extracting video URL...")
-                    dl_link = first_item.get('url')
-                    if dl_link:
-                        media_items.append({
-                            'type': 'video', 
-                            'download_url': dl_link,
-                            'thumbnail_url': first_item.get('thumbnail'), 
-                            'description': title
-                        })
-                    
-                # اگر عکس بود، لینک oEmbed را برای کیفیت بالا صدا می‌زنیم
-                else:
-                    print("First slide is PHOTO. Using oEmbed for cover quality.")
-                    oembed_data = get_oembed_data(first_url)
-                    if oembed_data:
-                        media_items.append(oembed_data)
-                    else:
-                        # فال‌بک: اگر oEmbed هم نشد، لینک کم کیفیت yt-dlp را می‌دهیم
-                         dl_link = first_item.get('url')
-                         if dl_link:
-                              media_items.append({
-                                'type': 'photo', 
-                                'download_url': dl_link,
-                                'thumbnail_url': first_item.get('thumbnail'), 
-                                'description': title
-                              })
-            
-        # پردازش ویدیو/ریلز تکی
-        elif video_info.get('is_video') or video_info.get('ext') == 'mp4':
-            print("Detected single VIDEO. Extracting video URL...")
-            dl_link = video_info.get('url')
-            if video_info.get('requested_formats'):
-                for fmt in video_info['requested_formats']:
-                    if fmt.get('url') and fmt.get('ext') == 'mp4':
-                        dl_link = fmt['url']; break
-            
-            if dl_link:
+            # در غیر این صورت (ویدیو یا عکس غیر اینستاگرام) لینک yt-dlp را می‌دهیم
+            elif dl_link:
                 media_items.append({
-                    'type': 'video', 
+                    'type': m_type, 
+                    'download_url': dl_link,
+                    'thumbnail_url': first_item.get('thumbnail'), 
+                    'description': first_item.get('title', title)
+                })
+
+        # ب) اگر محتوای تکی بود (یوتیوب شورت/ویدیو، تیک‌تاک، فیس‌بوک، عکس یا ویدیو اینستاگرام)
+        else:
+            m_type = 'video' if (video_info.get('is_video') or video_info.get('ext') == 'mp4') else 'photo'
+            dl_link = video_info.get('url')
+            
+            # اگر اینستاگرام و عکس تکی بود، اولویت با oEmbed است
+            if is_insta and m_type == 'photo':
+                oembed_data = get_oembed_data(input_url)
+                if oembed_data:
+                    media_items.append(oembed_data)
+                # اگر oEmbed شکست خورد، از لینک کم کیفیت yt-dlp استفاده می‌کنیم
+                elif dl_link:
+                    media_items.append({
+                        'type': m_type, 'download_url': dl_link,
+                        'thumbnail_url': video_info.get('thumbnail'), 'description': title
+                    })
+            
+            # برای همه ویدیوها (یوتیوب، تیک‌تاک، فیس‌بوک، اینستا)
+            elif m_type == 'video' and dl_link:
+                 media_items.append({
+                    'type': m_type, 
                     'download_url': dl_link,
                     'thumbnail_url': video_info.get('thumbnail'), 
                     'description': title
-                })
-        
-        # اگر yt-dlp چیز دیگری برگرداند (عکس تکی با لینک کم کیفیت)
-        elif not media_items:
-             dl_link = video_info.get('url')
-             if dl_link:
+                 })
+            
+            # برای عکس‌های تکی غیر اینستاگرام (مثلاً فیس‌بوک)
+            elif m_type == 'photo' and dl_link:
                  media_items.append({
-                     'type': 'photo', 'download_url': dl_link,
-                     'thumbnail_url': video_info.get('thumbnail'), 'description': title
+                    'type': m_type, 
+                    'download_url': dl_link,
+                    'thumbnail_url': video_info.get('thumbnail'), 
+                    'description': title
                  })
 
 
-    # 2. اگر yt-dlp نتوانست پاسخ دهد یا محتوای تکی است (عکس تکی)
-    # ==> استفاده از روش oEmbed
-    if not media_items:
-        print("yt-dlp failed or assumed single item. Trying oEmbed for High-Res Photo...")
-        oembed_data = get_oembed_data(insta_url)
+    # 2. اگر yt-dlp شکست خورد و اینستاگرام بود (فقط یک فال‌بک نهایی برای عکس تکی)
+    # این فقط برای اطمینان از پوشش موارد سخت اینستاگرام است
+    if is_insta and not media_items:
+        print("yt-dlp failed on Insta. Trying oEmbed as last resort...")
+        oembed_data = get_oembed_data(input_url)
         
         if oembed_data:
             media_items.append(oembed_data)
@@ -178,7 +184,8 @@ def get_info():
     if media_items:
         return jsonify({'success': True, 'title': title, 'media_items': media_items})
 
-    return jsonify({'success': False, 'message': 'محتوایی پیدا نشد. احتمالا پست خصوصی است یا لینک نامعتبر.'}), 404
+    # اگر تا اینجا هیچ محتوایی پیدا نشد (404)
+    return jsonify({'success': False, 'message': 'محتوایی پیدا نشد. احتمالا لینک نامعتبر است یا محتوای غیر قابل دانلود است.'}), 404
 
 if __name__ == '__main__':
     app.run(debug=True, port=8000)
