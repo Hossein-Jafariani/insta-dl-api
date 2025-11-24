@@ -1,0 +1,24 @@
+# render.yaml
+
+services:
+- type: web
+  name: your-project-name # ⭐️ نام پروژه خود را اینجا وارد کنید (مثلا: insta-downloader)
+  env: python
+  
+  # ⭐️ دستور build: نصب پکیج‌های پایتون و سپس نصب Node.js از طریق apt-get ⭐️
+  buildCommand: "pip install -r requirements.txt && sudo apt-get update && sudo apt-get install -y nodejs npm" 
+  
+  # ⭐️ دستور شروع: استفاده از Gunicorn برای اجرای اپلیکیشن Flask ⭐️
+  startCommand: "gunicorn app:app"
+  
+  # می‌توانید پلن را روی "starter" یا "free" تنظیم کنید
+  plan: free 
+  
+  envVars:
+  # IG_USERNAME و IG_PASSWORD برای دانلود استوری اینستاگرام ضروری هستند
+  - key: IG_USERNAME
+    value: "igdlll" # نام کاربری خود را اینجا وارد کنید (برای استوری‌ها)
+  - key: IG_PASSWORD
+    value: "Igdlll3456" # رمز عبور خود را اینجا وارد کنید (برای استوری‌ها)
+  - key: PYTHON_VERSION
+    value: 3.10.12 # برای پایداری بهتر، یک نسخه مشخص را تعیین کنید
