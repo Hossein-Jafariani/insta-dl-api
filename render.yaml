@@ -2,16 +2,14 @@
 
 services:
 - type: web
-  name: your-project-name # ⭐️ نام پروژه خود را اینجا وارد کنید (مثلا: insta-downloader)
+  name: your-project-name 
   env: python
   
-  # ⭐️ دستور build: نصب پکیج‌های پایتون و سپس نصب Node.js از طریق apt-get ⭐️
-  buildCommand: "pip install -r requirements.txt && sudo apt-get update && sudo apt-get install -y nodejs npm" 
+  # ⭐️ دستور build ساده شده: فقط نصب پکیج‌های پایتون ⭐️
+  buildCommand: "pip install -r requirements.txt"
   
-  # ⭐️ دستور شروع: استفاده از Gunicorn برای اجرای اپلیکیشن Flask ⭐️
   startCommand: "gunicorn app:app"
   
-  # می‌توانید پلن را روی "starter" یا "free" تنظیم کنید
   plan: free 
   
   envVars:
@@ -21,4 +19,4 @@ services:
   - key: IG_PASSWORD
     value: "Igdlll3456" # رمز عبور خود را اینجا وارد کنید (برای استوری‌ها)
   - key: PYTHON_VERSION
-    value: 3.10.12 # برای پایداری بهتر، یک نسخه مشخص را تعیین کنید
+    value: 3.10.12
