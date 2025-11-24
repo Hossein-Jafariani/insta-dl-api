@@ -51,8 +51,8 @@ def run_ytdlp(input_url, timeout=60):
     در صورت شکست، خطای دقیق را در لاگ چاپ می‌کند.
     """
     
-    IG_USERNAME = os.environ.get('IG_USERNAME')
-    IG_PASSWORD = os.environ.get('IG_PASSWORD')
+    IG_USERNAME = os.environ.get('igdlll')
+    IG_PASSWORD = os.environ.get('Igdlll3456')
 
     print(f"Running yt-dlp for: {input_url}")
     
@@ -180,3 +180,4 @@ def get_info():
 
 if __name__ == '__main__':
     app.run(debug=True, port=8000)
+
